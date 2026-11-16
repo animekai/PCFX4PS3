@@ -1,178 +1,45 @@
-# PCE-PS3 (v1.0.0)
+# PCFX4PS3 (Pre-Alpha / WIP)
 
-Port of **Hu-Go!** PC Engine / TurboGrafx-16 / SuperGrafx / CD-ROM2 for the **PlayStation 3** (PS3) using the PSL1GHT SDK.
+**PCFX4PS3** es un proyecto experimental de código abierto cuyo objetivo es portar un emulador independiente y optimizado de **NEC PC-FX** (consola de 32 bits lanzada en 1994) de forma nativa a **PlayStation 3** utilizando el SDK abierto **PSL1GHT**.
 
-Ported by **theheroGAC** (2026).
-
----
-
-## Authors & Credits
-
-PCE-PS3 is powered by the legendary Hu-Go! PC Engine emulation core, created and improved by dedicated retro-computing engineers:
-
-- **Zeograd (François-Xavier Delmotte)**: Original creator, architectural design, and primary maintainer of the Hu-Go! emulation core.
-- **David Ries**: Sound engine development, PSG envelope generation, and HuC6280 CPU extensions.
-- **Alex Krasivsky**: Core 6502 execution logic and base instruction set timing.
-- **notaz**: CDDA Redbook audio streaming and high-speed multi-platform optimizations.
-- **theheroGAC**: PlayStation 3 port (2026), PSL1GHT modern integration, low-latency 48 kHz Cell Audio ring buffer driver with hardware event queues, hardware-accelerated RSX video presentation, complete DualShock 3 active-high input mapping, custom multi-tab XMB frontend, 10-slot real-time state manager with live thumbnails, on-the-fly ZIP extractor, and CD-ROM2 CUE/ISO/ADPCM CDDA subsystem.
+> **Estado del Proyecto:** `Pre-Alpha / En Desarrollo Activo`  
+> Actualmente nos encontramos en la fase de integración estructural y adaptación de arquitectura (Big-Endian / Cell PPU + RSX). Aún no es una versión jugable final.
 
 ---
 
-## Overview
-
-PCE-PS3 is a high-performance, standalone homebrew emulator designed specifically for Sony PlayStation 3 consoles (compatible with all Custom Firmware such as Evilnat, Cobra CFW, and PS3HEN). 
-
-It accurately emulates the full range of NEC 8-bit and 16-bit video game hardware:
-- **PC Engine / TurboGrafx-16 (HuCard)**
-- **SuperGrafx** (HuC6270 Dual-VDC graphics engine)
-- **CD-ROM2 & Super CD-ROM2** (CDDA audio + ADPCM speech + System Card 3.0)
-- **Arcade Card Enhanced CD Games**
-
-Supported media file formats:
-- `.pce` (PC Engine / TurboGrafx-16 cartridge ROMs)
-- `.sgx` (SuperGrafx games)
-- `.cue` + `.bin` (CD-ROM2 audio/data images)
-- `.iso` (Standard 2048 bytes/sector CD-ROM images)
-- `.zip` (Direct ZIP archive decompression on-the-fly)
+## Meta del Proyecto
+Hasta ahora, la única forma de ejecutar títulos de NEC PC-FX en PlayStation 3 ha sido a través de núcleos pesados de Mednafen/RetroArch que sufren graves caídas de velocidad y cortes de sonido. **PCFX4PS3** busca resolver esto combinando:
+1. Un **núcleo de emulación ligero en C puro** (`pcfxemu`), evitando la sobrecarga de memoria y dependencias de C++ en el procesador principal (PPU).
+2. Un **frontend nativo de PS3** de bajo consumo con aceleración de video por hardware **RSX** y audio **Cell** de baja latencia a 48 kHz.
+3. Desarrollo iterativo asistido por IA (*vibe coding*) enfocado en optimizar la decodificación de video FMV (chips KING / RAINBOW) y el procesador NEC V810 para el hardware de PS3.
 
 ---
 
-## PS3 Port Features
-
-- **Dedicated 48 kHz Cell Audio Engine**:
-  - Direct hardware port streaming through Sony Cell Audio subsystem (`AUDIO_PORT_2CH`, 8 blocks of 256 samples).
-  - Hardware event queue notification loop (`audioCreateNotifyEventQueue` + `audioSetNotifyEventQueue`) ensuring click-free, zero-stutter PSG, ADPCM, and CDDA audio synthesis.
-  - Fully adjustable master audio volume slider directly inside the in-game Quick Menu and main settings.
-
-- **Hardware-Accelerated RSX Video Presentation**:
-  - Full HD output with automatic screen centering and aspect ratio control:
-    - **4:3 Standard** (Classic CRT television ratio with crisp pillarboxes)
-    - **Pixel-Perfect** (Integer scaling matching native HuC6270 display registers)
-    - **16:9 Widescreen** (Full 1080p widescreen fill)
-  - Video scaling filters: **Nearest (Crisp)** (sharp retro integer pixels), **Linear (Smooth)** (bilinear filtering), and **Sharp Bilinear** (anisotropic sharp edges). Filters are applied dynamically in real-time during live gameplay and inside the in-game quick menu.
-  - CRT Scanlines overlay simulation option.
-  - Real-time on-screen FPS counter.
-  - **In-Game Screenshot & Live ROM Preview**: Instant one-click screenshot capture via the In-Game Quick Menu. Automatically saves uncompressed 24-bit full-resolution BMP images to `/dev_hdd0/pce4ps3/screenshots/` and generates preview thumbnails for the Library HuCard / CD media card (`/dev_hdd0/pce4ps3/previews/<rom_base>.bmp`).
-  - **Fast Forward Turbo Speed**: Hold **R2** (or configured button) during gameplay to accelerate emulation at 2x, 3x, 4x, or 5x speed with an on-screen `>> FAST FORWARD` HUD indicator.
-  - **Controller Remapping & Presets**: Dedicated controller remapping modal available in both Settings tab and Quick Menu. Remap any DualShock 3 button to Button I, II, Turbo I, Turbo II, Run, Select, Fast Forward, or 6-button arcade punches/kicks. One-click presets include PC Engine Standard, Modern/SNES, and 6-Button Arcade.
-
-- **DualShock 3 Gamepad & Avenue Pad 6 (6-Button) Support**:
-  - Full support for the official NEC **Avenue Pad 6** 6-button controller protocol with 4-scan state machine, auto-detected for all fighting games (*Street Fighter II'*, *Fatal Fury*, *Garou Densetsu*, *Art of Fighting*, *World Heroes*, *Flash Hiders*, *Advanced V.G.*, *Kabuki Ittouryoudan*, *Martial Champion*, *Strip Fighter II*, *Asuka 120%*, etc.) and toggleable in Settings and Quick Menu (`Auto (Fighting Games)`, `6-Button Arcade`, `2-Button Standard`).
-  - Authentic 6-button arcade layout on DualShock 3:
-    - **Square**: Button IV (Light Punch)
-    - **Triangle**: Button V (Medium Punch)
-    - **R1** (or L1): Button VI (Heavy Punch)
-    - **Cross**: Button I (Light Kick)
-    - **Circle**: Button II (Medium Kick)
-    - **R2**: Button III (Heavy Kick)
-  - Active-high polling logic ensuring smooth, continuous character movement without dropped frames or stuttering.
-  - Configurable 2-button layout: swap Button I / Button II between Cross and Circle or Cross and Square.
-  - Independent hardware Turbo Fire on L1 / R1 with selectable frequencies (15 Hz, 20 Hz, 30 Hz, 60 Hz).
-  - Up to 5 simultaneous controllers supported for multiplayer games (Bomberman, Dungeon Explorer, etc.).
-  - Seamless in-game Quick Menu triggered with **L2 + R2**, **L3 + R3**, or **SELECT + START**.
-
-- **Street Fighter II' & Large HuCard Bankswitching Support**:
-  - Full hardware emulation of Capcom's custom 20 Mbit (2.5 MB) bankswitching mapper (`0x1FF0`–`0x1FF3` bank registers), eliminating all character portrait tile corruptions and graphic errors in *Street Fighter II': Champion Edition*.
-  - Balanced audio summing preventing digital multi-channel distortion and loud clipping.
-
-- **Modern Multi-Tab User Interface**:
-  - **Library Tab**: Automatic recursive scanner displaying games found across internal HDD and connected USB drives with clean categorization badges (`[PCE]`, `[SGX]`, `[CD]`, `[ZIP]`).
-  - **File Browser Tab**: Full directory navigation across `/dev_hdd0` and all USB storage devices (`/dev_usb000` through `/dev_usb007`).
-  - **Save States Tab**: 10 independent save state slots per game with real-time RGB thumbnail screenshot previews and single-button delete / restore.
-  - **Settings Tab**: Display aspect, video filters, scanlines, master volume, button mapping, and turbo rate saved to persistent `hugo.ini`.
-  - **BIOS & CD-ROM2 Tab**: System Card status checker and one-click USB BIOS auto-importer.
-  - **Controls & Info Tab**: Full button diagram and port credits.
-
-- **Robust Error Handling & Stability**:
-  - Comprehensive ROM and ZIP verification preventing console freezes when non-PCE or corrupted files are selected.
-  - Helpful graphical modal alert dialogs informing the user when a BIOS is missing or an invalid file format is loaded.
-  - Clean PS Button XMB shutdown with proper SysUtil event handling and resource cleanup without freezes or double-beeps.
+## Arquitectura y Cómo lo Estamos Haciendo
+El proyecto fusiona dos piezas clave en una estructura limpia y modular:
+* **`ps3/` (Frontend y Drivers Nativos):** Interfaz estilo XMB con soporte para DualShock 3, escalado RSX, guardado rápido con miniaturas y gestor de archivos en `/dev_hdd0` y USB.
+* **`core_pcfx/` (Núcleo Emulador en C Puro):** Motor de emulación extraído de `pcfxemu` (CPU NEC V810, chips HuC6270/HuC6261/HuC6272, sonido ADPCM/CDDA y lector CD-ROM) conectado mediante una capa puente (`pcfx_headless.h`).
 
 ---
 
-## Controls
-
-### Frontend & Menu Navigation
-| Button | Action |
-|---|---|
-| **D-Pad / Left Stick** | Navigate items / Change settings (smooth rapid scrolling when held) |
-| **D-Pad Left / Right** | Page Jump (Scroll 10 items at a time in Library and Browser) |
-| **Cross (X)** | Confirm / Select / Launch Game / Exit to XMB (on CREDITS & EXIT tab) |
-| **Circle (O)** | Cancel / Return / Back |
-| **Square** | Switch Library Media Filter (`ALL` / `HUCARD` / `SUPERGRAFX` / `CD-ROM2`) |
-| **Triangle** | Rescan Library / Import BIOS / Delete Save State |
-| **L1 / R1** | Switch Tabs (`LIBRARY` ↔ `BROWSER` ↔ `STATES` ↔ `SETTINGS` ↔ `BIOS` ↔ `CREDITS & EXIT`) |
-| **SELECT** | Cycle Root Quick-Bookmarks in File Browser (`/dev_hdd0`, `/dev_usb000`, `/dev_usb001`) |
-
-### In-Game Controls
-| Button | PC Engine Function |
-|---|---|
-| **D-Pad / Left Analog Stick** | Directional Pad (Up, Down, Left, Right) |
-| **Circle (or Cross)** | Button I (Primary Action / Confirm) |
-| **Cross (or Square)** | Button II (Secondary Action / Jump) |
-| **Triangle** | Turbo Button I (Rapid Fire) |
-| **Square (or Circle)** | Turbo Button II (Rapid Fire) |
-| **START** | RUN Button (Start / Pause) |
-| **SELECT** | SELECT Button (PC Engine) |
-| **R2** | Fast Forward (Hold to accelerate emulation 2x–5x) |
-| **R1** | Dedicated Turbo Fire Button I |
-| **L1** | Dedicated Turbo Fire Button II |
-| **L2 + R2** | In-Game Quick Menu (Save/Load State, Reset, Screenshot, Remap, Exit) |
-| **L3 + R3** | Alternative In-Game Quick Menu Shortcut |
-| **SELECT + START** | Classic In-Game Quick Menu Shortcut |
-| **Clean Exit to XMB** | Navigate to the last tab **`CREDITS & EXIT`** and press **Cross (X)**, or select **`Exit PCE-PS3 (Return to XMB)`** from the In-Game Quick Menu or Settings tab. The `SELECT` button is never used for exiting, avoiding any accidental exit during gameplay or navigation. |
+## Progreso Actual
+- [x] **Fase 1:** Configuración del entorno `ps3toolchain` + `PSL1GHT` en Ubuntu (WSL) y creación del repositorio limpio.
+- [x] **Fase 2:** Integración de la base estructural del frontend de PS3 y aislamiento del núcleo en C puro (`core_pcfx/`).
+- [ ] **Fase 3 (En curso):** Adaptación del `Makefile` y creación del puente `ps3_pcfx_core.c` para compilar la primera prueba de menús (`out/PCFX4PS3.pkg`) en PS3 real (HEN/CFW).
+- [ ] **Fase 4:** Carga de BIOS (`pcfx.rom`), adaptación Big-Endian y ejecución de pruebas de imagen y sonido.
+- [ ] **Fase 5:** Optimización de velocidad FMV con RSX y soporte completo para imágenes `.cue`/`.bin` e `.iso`.
 
 ---
 
-## Directory Structure on PS3
+## Créditos y Agradecimientos
+Este proyecto es posible gracias al trabajo abierto de desarrolladores e ingenieros de la escena retro y de PlayStation 3:
 
-At first launch, the emulator creates the necessary directory tree on the internal hard drive:
-
-```
-/dev_hdd0/pce4ps3/
-  ├── roms/        PC Engine ROMs (.pce, .sgx, .zip, .cue, .iso)
-  ├── bios/        Super CD-ROM2 System Card (syscard3.pce)
-  ├── saves/       10-slot save states (.s00-.s09) and thumbnail images (.thm)
-  ├── screenshots/ Uncompressed 24-bit BMP screenshots (pce_snap_0001.bmp)
-  ├── bram/        Battery-backed 8KB Backup RAM per game (.brm)
-  ├── hugo.ini     Persistent configuration file
-  └── bootlog.txt  Diagnostic log output
-```
-
-### ROM Locations
-The Library and File Browser automatically detect games stored in any of the following locations:
-- `/dev_hdd0/pce4ps3/roms/`
-- `/dev_hdd0/ROMS/pce/` or `/dev_hdd0/roms/pce/`
-- External USB drives: `/dev_usb000` through `/dev_usb007` (in `/roms/pce/`, `/pce/`, `/ROMS/`, or drive root)
-
-### CD-ROM2 System Card (BIOS)
-CD-ROM2 and Super CD-ROM2 games require the NEC Super CD-ROM2 System Card BIOS:
-- Place `syscard3.pce` into `/dev_hdd0/pce4ps3/bios/syscard3.pce`, OR
-- Place `syscard3.pce` on the root of your USB flash drive and press **Triangle** in the **BIOS & CD-ROM2** tab to automatically import it with a single click.
+* **[theheroGAC](https://github.com):** Por su excelente trabajo en **PCE4PS3**, del cual utilizamos la base del frontend XMB, los drivers de video RSX, el motor de audio Cell a 48 kHz y los scripts de empaquetado para PSL1GHT.
+* **[gameblabla](https://github.com):** Por reescribir y optimizar **pcfxemu** en C puro con soporte *headless* y mejoras de rendimiento para plataformas de recursos limitados.
+* **Equipo de Mednafen & Beetle PC-FX:** Por la ingeniería inversa, precisión de hardware y documentación de la arquitectura NEC PC-FX.
+* **Comunidad PS3Dev / PSL1GHT:** Por mantener vivo el SDK abierto para PlayStation 3.
 
 ---
 
-## Building from Source
-
-Requires the **PSL1GHT v2** SDK (or `ps3dev-sdk`) environment.
-
-```bash
-export PS3DEV=/path/to/ps3dev-sdk
-export PSL1GHT=$PS3DEV/psl1ght
-export PATH=$PS3DEV/bin:$PS3DEV/ppu/bin:$PSL1GHT/host/bin:$PATH
-
-./build.sh
-./package.sh
-```
-
-The build scripts generate:
-- `dist/PCE4PS3.pkg`: Standard unsigned package for Custom Firmware (CFW) and PS3HEN.
-- `dist/PCE4PS3.gnpdrm.pkg`: Signed retail NPDRM package.
-- `pce_ps3.elf`: Compiled Cell PPU executable.
-
----
-
-## License & Disclaimer
-
-PCE-PS3 is released under the GNU General Public License (GPL).  
-PC Engine and TurboGrafx-16 are trademarks of NEC Home Electronics and Hudson Soft. This software is an independent open-source project and is not affiliated with or endorsed by Sony Interactive Entertainment, NEC, or Hudson Soft.
+## Licencia
+Este proyecto se distribuye bajo la licencia **GNU General Public License (GPL)**, respetando las licencias originales de los proyectos base utilizados.
