@@ -1,0 +1,828 @@
+#include "pcfx_headless.h"
+
+#include <ctype.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+struct Command
+{
+    uint64_t frame;
+    bool relative;
+    bool clear;
+    uint16_t set_mask;
+    uint16_t clear_mask;
+};
+
+struct Dump
+{
+    const char* region;
+    const char* path;
+};
+
+struct CommandList
+{
+    struct Command* data;
+    size_t count;
+    size_t cap;
+};
+
+struct DumpList
+{
+    struct Dump* data;
+    size_t count;
+    size_t cap;
+};
+
+static void usage(const char* argv0)
+{
+    fprintf(stderr,
+        "Usage: %s [options] [game.cue|game.chd|game.toc|game.bin|game.iso|playlist.m3u|program.ex|raw.pcfxboot]\n"
+        "\n"
+        "Options:\n"
+        "  --bios-dir DIR          Directory or BIOS file; accepts pcfx.rom, pcfxbios.bin, pcfxv101.bin, pcfxga.rom (auto-searches $HOME/.pcfxemu)\n"
+        "  --save-dir DIR          Save root directory (default: $HOME/.pcfxemu; SRAM/NVRAM goes in DIR/sram)\n"
+        "  --frames N              Run exactly N emulated frames (default: 1)\n"
+        "  --commands FILE         Apply controller command list before each matching frame\n"
+        "  --auto-run              Pulse RUN/START during early boot; useful for PC-FXGA BIOS CD prompts\n"
+        "  --pad BUTTONS           Initial pad state, e.g. START+A or 0x0081\n"
+        "  --horizontal auto|dots|clock  Output 256/341 dots, or 1024-clock mixed mode (default: auto)\n"
+        ""
+        "  --analog off|component|svideo  Approximate output bandwidth (default: off, raw exact)\n"
+        "  --vdc-phase N           Adjustable VDC HSYNC phase in mixer ticks (-64..64, default: 18)\n"
+        "  --screenshot FILE.png   Save final screenshot as 8-bit RGBA PNG\n"
+        "  --y4m FILE.y4m          Capture every executed frame as YUV4MPEG2 C444\n"
+        "  --wav FILE.wav          Capture stereo signed 16-bit PCM audio\n"
+        "  --frame-csv FILE.csv    Per-emulated-frame video-change diagnostic (no timing changes)\n"
+        "  --ram-csv FILE.csv      Log RAM counter words once per emulated field\n"
+        "  --ram-word OFFSET       Monitor an offset within console RAM (repeatable; hex accepted)\n"
+        "  --frame-csv-rect X,Y,W,H  Analyze a display crop, to exclude overlays/HUD\n"
+        "  --dump REGION FILE      Dump memory region: ram, saveram, or state\n"
+        "  --state-in FILE         Load emulator state before running frames\n"
+        "  --state-out FILE        Save emulator state after running frames\n"
+        "  --disable-3d-hardware   Disable optional HuC6273/Aurora 3D chip\n"
+        "  --no-seek-audio-delay   Disable TODO-marked PC-FX SEEK/audio command delays\n"
+        "  --auto                  Select PC-FX or PC-FXGA from the loaded media (default for frontends)\n"
+        "  --pcfxboot              Load the positional file as raw V810 code at RAM $8000 (for .bin cartridge dumps)\n"
+        "  --pcfx                  Force standard PC-FX BIOS/startup path only\n"
+        "  --pcfxga                Force PC-FXGA BIOS/startup path only\n"
+        "\n"
+        "Command file format:\n"
+        "  # comments are allowed\n"
+        "  0 START                 absolute state: START pressed at frame 0\n"
+        "  30 NONE                 absolute state: no buttons at frame 30\n"
+        "  60 +A +RIGHT            relative: press A and RIGHT\n"
+        "  90 -A -RIGHT            relative: release A and RIGHT\n"
+        "\n"
+        "Button names: A B C X Y Z START SELECT UP DOWN LEFT RIGHT.\n",
+        argv0);
+}
+
+static void uppercase_copy(char* dst, size_t dst_size, const char* src)
+{
+    if(!dst_size)
+        return;
+    size_t i = 0;
+    if(src)
+    {
+        for(; i + 1 < dst_size && src[i]; i++)
+            dst[i] = (char)toupper((unsigned char)src[i]);
+    }
+    dst[i] = 0;
+}
+
+static bool path_is_regular_file(const char* path)
+{
+    struct stat st;
+    return path && path[0] && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static void path_join_cli(char* out, size_t out_size, const char* a, const char* b)
+{
+    size_t alen;
+    if(!out || !out_size)
+        return;
+    if(!a || !a[0])
+    {
+        snprintf(out, out_size, "%s", b ? b : "");
+        return;
+    }
+    alen = strlen(a);
+    if(a[alen - 1] == '/' || a[alen - 1] == '\\')
+        snprintf(out, out_size, "%s%s", a, b ? b : "");
+    else
+        snprintf(out, out_size, "%s/%s", a, b ? b : "");
+}
+
+static bool pcfx_bios_exists_cli(const char* dir_or_file)
+{
+    static const char* names[] = {
+        "pcfx.rom", "pcfxbios.bin", "pcfxv101.bin", "pcfx_bios.bin",
+        "pcfxga.rom", "pcfxga.bin", "PCFX.ROM", "PCFXBIOS.BIN",
+        "PCFXV101.BIN", "PCFXGA.ROM", "PCFXGA.BIN"
+    };
+    char path[1024];
+    if(path_is_regular_file(dir_or_file))
+        return true;
+    for(size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+    {
+        path_join_cli(path, sizeof(path), dir_or_file, names[i]);
+        if(path_is_regular_file(path))
+            return true;
+    }
+    return false;
+}
+
+static void parent_dir_cli(char* out, size_t out_size, const char* p)
+{
+    const char* slash;
+    if(!out || !out_size)
+        return;
+    if(!p || !p[0])
+    {
+        snprintf(out, out_size, ".");
+        return;
+    }
+    slash = strrchr(p, '/');
+#ifdef _WIN32
+    {
+        const char* bslash = strrchr(p, '\\');
+        if(!slash || (bslash && bslash > slash))
+            slash = bslash;
+    }
+#endif
+    if(!slash)
+    {
+        snprintf(out, out_size, ".");
+        return;
+    }
+    if(slash == p)
+    {
+        snprintf(out, out_size, "/");
+        return;
+    }
+    size_t len = (size_t)(slash - p);
+    if(len >= out_size) len = out_size - 1;
+    memcpy(out, p, len);
+    out[len] = 0;
+}
+
+static void home_pcfxemu_cli(char* out, size_t out_size)
+{
+    const char* home = getenv("HOME");
+    if(home && home[0])
+        path_join_cli(out, out_size, home, ".pcfxemu");
+    else
+        snprintf(out, out_size, ".pcfxemu");
+}
+
+static const char* default_save_root_cli(char* storage, size_t storage_size)
+{
+    home_pcfxemu_cli(storage, storage_size);
+    return storage;
+}
+
+static const char* autodetect_bios_dir_cli(const char* requested, const char* game, char* storage, size_t storage_size)
+{
+    char game_dir[1024];
+    char home_dir[1024];
+    char home_bios_dir[1024];
+    const char* env_bios = getenv("PCFX_BIOS_DIR");
+
+    if(requested && strcmp(requested, "."))
+        return requested;
+    if(requested && pcfx_bios_exists_cli(requested))
+        return requested;
+    if(env_bios && env_bios[0] && pcfx_bios_exists_cli(env_bios))
+        return env_bios;
+    if(game && game[0])
+    {
+        parent_dir_cli(game_dir, sizeof(game_dir), game);
+        if(pcfx_bios_exists_cli(game_dir))
+            return snprintf(storage, storage_size, "%s", game_dir), storage;
+    }
+    home_pcfxemu_cli(home_dir, sizeof(home_dir));
+    path_join_cli(home_bios_dir, sizeof(home_bios_dir), home_dir, "bios");
+    if(pcfx_bios_exists_cli(home_bios_dir))
+        return snprintf(storage, storage_size, "%s", home_bios_dir), storage;
+    if(pcfx_bios_exists_cli(home_dir))
+        return snprintf(storage, storage_size, "%s", home_dir), storage;
+    return requested ? requested : ".";
+}
+
+static bool parse_button_atom(const char* token, uint16_t* bit)
+{
+    char t[64];
+    uppercase_copy(t, sizeof(t), token ? token : "");
+    if(!strcmp(t, "A")) *bit = PCFX_PAD_A;
+    else if(!strcmp(t, "B")) *bit = PCFX_PAD_B;
+    else if(!strcmp(t, "C")) *bit = PCFX_PAD_C;
+    else if(!strcmp(t, "X")) *bit = PCFX_PAD_X;
+    else if(!strcmp(t, "Y")) *bit = PCFX_PAD_Y;
+    else if(!strcmp(t, "Z")) *bit = PCFX_PAD_Z;
+    else if(!strcmp(t, "SELECT") || !strcmp(t, "SEL")) *bit = PCFX_PAD_SELECT;
+    else if(!strcmp(t, "START") || !strcmp(t, "RUN")) *bit = PCFX_PAD_START;
+    else if(!strcmp(t, "UP")) *bit = PCFX_PAD_UP;
+    else if(!strcmp(t, "RIGHT")) *bit = PCFX_PAD_RIGHT;
+    else if(!strcmp(t, "DOWN")) *bit = PCFX_PAD_DOWN;
+    else if(!strcmp(t, "LEFT")) *bit = PCFX_PAD_LEFT;
+    else return false;
+    return true;
+}
+
+static bool parse_pad_expr(const char* expr, uint16_t* out)
+{
+    if(!expr || !out)
+        return false;
+    char* end = NULL;
+    unsigned long numeric = strtoul(expr, &end, 0);
+    if(end && *end == 0)
+    {
+        *out = (uint16_t)numeric;
+        return true;
+    }
+
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s", expr);
+    uint16_t state = 0;
+    const char* delims = "+,| \t\r\n";
+    for(char* tok = strtok(buf, delims); tok; tok = strtok(NULL, delims))
+    {
+        uint16_t bit = 0;
+        if(!parse_button_atom(tok, &bit))
+            return false;
+        state |= bit;
+    }
+    *out = state;
+    return true;
+}
+
+static bool command_list_push(struct CommandList* list, struct Command cmd)
+{
+    if(list->count == list->cap)
+    {
+        size_t ncap = list->cap ? list->cap * 2 : 32;
+        struct Command* ndata = (struct Command*)realloc(list->data, ncap * sizeof(*ndata));
+        if(!ndata)
+            return false;
+        list->data = ndata;
+        list->cap = ncap;
+    }
+    list->data[list->count++] = cmd;
+    return true;
+}
+
+static bool dump_list_push(struct DumpList* list, struct Dump d)
+{
+    if(list->count == list->cap)
+    {
+        size_t ncap = list->cap ? list->cap * 2 : 8;
+        struct Dump* ndata = (struct Dump*)realloc(list->data, ncap * sizeof(*ndata));
+        if(!ndata)
+            return false;
+        list->data = ndata;
+        list->cap = ncap;
+    }
+    list->data[list->count++] = d;
+    return true;
+}
+
+static int command_cmp(const void* ap, const void* bp)
+{
+    const struct Command* a = (const struct Command*)ap;
+    const struct Command* b = (const struct Command*)bp;
+    if(a->frame < b->frame) return -1;
+    if(a->frame > b->frame) return 1;
+    return 0;
+}
+
+static bool load_commands(const char* path, struct CommandList* commands)
+{
+    FILE* fp = fopen(path, "rb");
+    if(!fp)
+    {
+        fprintf(stderr, "Failed to open command file: %s\n", path);
+        return false;
+    }
+
+    char line[1024];
+    unsigned line_no = 0;
+    while(fgets(line, sizeof(line), fp))
+    {
+        line_no++;
+        char* hash = strchr(line, '#');
+        if(hash) *hash = 0;
+        char* tok = strtok(line, " \t\r\n");
+        if(!tok)
+            continue;
+        char* end = NULL;
+        uint64_t frame = strtoull(tok, &end, 0);
+        if(!end || *end)
+        {
+            fprintf(stderr, "%s:%u: expected frame number\n", path, line_no);
+            fclose(fp);
+            return false;
+        }
+
+        struct Command cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.frame = frame;
+        bool saw_token = false;
+        bool saw_relative = false;
+        bool saw_absolute = false;
+        for(tok = strtok(NULL, " \t\r\n"); tok; tok = strtok(NULL, " \t\r\n"))
+        {
+            saw_token = true;
+            char t[64];
+            uppercase_copy(t, sizeof(t), tok);
+            if(!strcmp(t, "NONE") || !strcmp(t, "CLEAR") || !strcmp(t, "0"))
+            {
+                cmd.clear = true;
+                saw_absolute = true;
+                continue;
+            }
+            char sign = 0;
+            if(tok[0] == '+' || tok[0] == '-')
+            {
+                sign = tok[0];
+                tok++;
+                saw_relative = true;
+            }
+            else
+                saw_absolute = true;
+
+            uint16_t bit = 0;
+            if(!parse_button_atom(tok, &bit))
+            {
+                uint16_t numeric = 0;
+                if(parse_pad_expr(tok, &numeric))
+                    bit = numeric;
+                else
+                {
+                    fprintf(stderr, "%s:%u: unknown button '%s'\n", path, line_no, tok);
+                    fclose(fp);
+                    return false;
+                }
+            }
+            if(sign == '-')
+                cmd.clear_mask |= bit;
+            else
+                cmd.set_mask |= bit;
+        }
+        if(!saw_token)
+        {
+            fprintf(stderr, "%s:%u: expected at least one button token\n", path, line_no);
+            fclose(fp);
+            return false;
+        }
+        if(saw_relative && saw_absolute && !cmd.clear)
+        {
+            fprintf(stderr, "%s:%u: do not mix relative and absolute button syntax on one line\n", path, line_no);
+            fclose(fp);
+            return false;
+        }
+        cmd.relative = saw_relative && !cmd.clear;
+        if(!command_list_push(commands, cmd))
+        {
+            fprintf(stderr, "out of memory while reading commands\n");
+            fclose(fp);
+            return false;
+        }
+    }
+    fclose(fp);
+    qsort(commands->data, commands->count, sizeof(commands->data[0]), command_cmp);
+    return true;
+}
+
+static void apply_command(PCFX_Headless* emu, const struct Command* cmd)
+{
+    uint16_t state = pcfx_headless_get_pad(emu, 0);
+    if(cmd->clear)
+        state = 0;
+    if(cmd->relative)
+    {
+        state |= cmd->set_mask;
+        state &= (uint16_t)~cmd->clear_mask;
+    }
+    else
+    {
+        state = cmd->set_mask;
+    }
+    pcfx_headless_set_pad(emu, 0, state);
+}
+
+
+static bool add_auto_run_commands(struct CommandList* commands)
+{
+    static const struct { uint64_t frame; uint16_t state; } seq[] = {
+        { 30, PCFX_PAD_START }, { 90, 0 },
+        { 120, PCFX_PAD_START }, { 180, 0 },
+        { 300, PCFX_PAD_START }, { 360, 0 },
+        { 600, PCFX_PAD_START }, { 660, 0 }
+    };
+    for(size_t i = 0; i < sizeof(seq) / sizeof(seq[0]); i++)
+    {
+        struct Command cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.frame = seq[i].frame;
+        cmd.set_mask = seq[i].state;
+        if(seq[i].state == 0)
+            cmd.clear = true;
+        if(!command_list_push(commands, cmd))
+            return false;
+    }
+    return true;
+}
+
+static const char* need_arg(int* i, int argc, char** argv, const char* opt)
+{
+    if(*i + 1 >= argc)
+    {
+        fprintf(stderr, "%s requires an argument\n", opt);
+        exit(2);
+    }
+    (*i)++;
+    return argv[*i];
+}
+
+/* Video cadence instrumentation is deliberately frontend-only: it does not
+ * alter V810 clocks, TETSU frame pacing, or the rendered framebuffer. */
+struct FrameDiagnostic
+{
+    FILE* output;
+    uint8_t* previous;
+    size_t previous_capacity;
+    int prev_w, prev_h, prev_bpp;
+    uint64_t frame_count;
+    int x,y,w,h;
+};
+
+static int frame_diagnostic_write(struct FrameDiagnostic* d, PCFX_Headless* emu,
+                                  uint64_t frame)
+{
+    int w=0,h=0,pitch=0,format=0,bpp=0;
+    const uint8_t* pixels = (const uint8_t*)pcfx_headless_get_pixels(emu,&w,&h,&pitch,&format,&bpp);
+    if(!pixels || w < 1 || h < 1 || pitch < w || (bpp != 2 && bpp != 4))
+        return 0;
+    int x0=d->x, y0=d->y, x1=w, y1=h;
+    if(d->w > 0 && d->h > 0)
+    {
+        x1=x0+d->w;
+        y1=y0+d->h;
+    }
+    if(x0 < 0) x0=0;
+    if(y0 < 0) y0=0;
+    if(x0 >= w || y0 >= h) return 0;
+    if(x1 > w) x1=w;
+    if(y1 > h) y1=h;
+    if(x1 <= x0 || y1 <= y0) return 0;
+    size_t row_bytes=(size_t)(x1-x0)*(size_t)bpp;
+    size_t capacity=row_bytes*(size_t)(y1-y0);
+    if(capacity > d->previous_capacity)
+    {
+        uint8_t* temp=(uint8_t*)realloc(d->previous, capacity);
+        if(!temp) return 0;
+        d->previous=temp;
+        d->previous_capacity=capacity;
+    }
+    int comparable=(d->frame_count && d->prev_w==(x1-x0) &&
+                    d->prev_h==(y1-y0) && d->prev_bpp==bpp);
+    uint64_t hash=UINT64_C(14695981039346656037);
+    size_t changed=0;
+    for(int y=y0; y<y1; y++)
+    {
+        const uint8_t* src=pixels+((size_t)y*(size_t)pitch+(size_t)x0)*(size_t)bpp;
+        uint8_t* dst=d->previous+(size_t)(y-y0)*row_bytes;
+        for(size_t i=0;i<row_bytes;i++)
+        {
+            hash ^= src[i];
+            hash *= UINT64_C(1099511628211);
+        }
+        for(size_t x=0;x<row_bytes;x+=(size_t)bpp)
+        {
+            int different=0;
+            for(int k=0;k<bpp;k++)
+                different |= (comparable && src[x+k] != dst[x+k]);
+            changed += different;
+        }
+        memcpy(dst,src,row_bytes);
+    }
+    d->prev_w=x1-x0;
+    d->prev_h=y1-y0;
+    d->prev_bpp=bpp;
+    d->frame_count++;
+    return fprintf(d->output,"%llu,%d,%d,%zu,%016llx\n",
+        (unsigned long long)frame, x1-x0, y1-y0, changed,
+        (unsigned long long)hash) >= 0;
+}
+
+int main(int argc, char** argv)
+{
+    const char* bios_dir = ".";
+    bool bios_dir_explicit = false;
+    const char* save_dir = NULL;
+    const char* screenshot = NULL;
+    const char* y4m = NULL;
+    const char* wav = NULL;
+    const char* frame_csv = NULL;
+    const char* ram_csv = NULL;
+    size_t ram_offsets[16];
+    size_t ram_offset_count = 0;
+    FILE* ram_output = NULL;
+    struct FrameDiagnostic diagnostic = {0};
+    const char* state_in = NULL;
+    const char* state_out = NULL;
+    const char* command_file = NULL;
+    const char* game = NULL;
+    uint64_t frames = 1;
+    int horizontal_width_mode = PCFX_OUTPUT_AUTO;
+    int analog_mode = 0;
+    int vdc_phase = 18;
+    uint16_t initial_pad = 0;
+    bool have_initial_pad = false;
+    bool auto_run = false;
+    bool disable_3d_hardware = false;
+    bool disable_seek_audio_delay = false;
+    bool pcfxboot = false;
+    int bios_mode = 0;
+    struct DumpList dumps;
+    memset(&dumps, 0, sizeof(dumps));
+
+    for(int i = 1; i < argc; i++)
+    {
+        const char* a = argv[i];
+        if(!strcmp(a, "--help") || !strcmp(a, "-h"))
+        {
+            usage(argv[0]);
+            free(dumps.data);
+            return 0;
+        }
+        else if(!strcmp(a, "--bios-dir"))
+        {
+            bios_dir = need_arg(&i, argc, argv, a);
+            bios_dir_explicit = true;
+        }
+        else if(!strcmp(a, "--save-dir")) save_dir = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--horizontal"))
+        {
+            const char* value = need_arg(&i, argc, argv, a);
+            if(!strcmp(value, "auto")) horizontal_width_mode = PCFX_OUTPUT_AUTO;
+            else if(!strcmp(value, "dots")) horizontal_width_mode = PCFX_OUTPUT_DOTS;
+            else if(!strcmp(value, "clock") || !strcmp(value, "1024")) horizontal_width_mode = PCFX_OUTPUT_CLOCK;
+            else { fprintf(stderr, "Invalid --horizontal: %s\n", value); return 2; }
+        }
+        else if(!strcmp(a, "--analog"))
+        {
+            const char* v = need_arg(&i,argc,argv,a);
+            if(!strcmp(v,"off")) analog_mode=0;
+            else if(!strcmp(v,"component")) analog_mode=1;
+            else if(!strcmp(v,"svideo")) analog_mode=2;
+            else { fprintf(stderr,"Invalid analog mode: %s\n",v); return 2; }
+        }
+        else if(!strcmp(a,"--vdc-phase"))
+        {
+            const char* v = need_arg(&i,argc,argv,a);
+            char* end=NULL;
+            long t=strtol(v,&end,10);
+            if(!end || *end || t < -64 || t > 64) { fprintf(stderr,"--vdc-phase must be -64..64 ticks\n"); return 2; }
+            vdc_phase=(int)t;
+        }
+        else if(!strcmp(a, "--frames")) frames = strtoull(need_arg(&i, argc, argv, a), NULL, 0);
+        else if(!strcmp(a, "--commands")) command_file = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--auto-run")) auto_run = true;
+        else if(!strcmp(a, "--screenshot")) screenshot = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--y4m")) y4m = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--wav")) wav = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--frame-csv")) frame_csv = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--ram-csv")) ram_csv = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--ram-word"))
+        {
+            const char* val = need_arg(&i, argc, argv, a);
+            char* end = NULL;
+            unsigned long v = strtoul(val, &end, 0);
+            if(!end || *end || ram_offset_count >= 16 || v >= 0x200000 || (v & 3))
+            { fprintf(stderr,"Invalid --ram-word offset: %s\n", val); return 2; }
+            ram_offsets[ram_offset_count++] = (size_t)v;
+        }
+
+        else if(!strcmp(a, "--frame-csv-rect"))
+        {
+            const char* rect=need_arg(&i,argc,argv,a);
+            char tail;
+            if(sscanf(rect,"%d,%d,%d,%d%c", &diagnostic.x,&diagnostic.y,
+                      &diagnostic.w,&diagnostic.h,&tail)!=4 ||
+               diagnostic.x<0 || diagnostic.y<0 || diagnostic.w<1 || diagnostic.h<1)
+            { fprintf(stderr,"Invalid --frame-csv-rect; use X,Y,W,H with positive W,H\n"); return 2; }
+        }
+        else if(!strcmp(a, "--state-in")) state_in = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--state-out")) state_out = need_arg(&i, argc, argv, a);
+        else if(!strcmp(a, "--disable-3d-hardware")) disable_3d_hardware = true;
+        else if(!strcmp(a, "--no-seek-audio-delay")) disable_seek_audio_delay = true;
+        else if(!strcmp(a, "--seek-audio-delay")) disable_seek_audio_delay = false;
+        else if(!strcmp(a, "--auto")) bios_mode = 2;
+        else if(!strcmp(a, "--pcfx")) bios_mode = 0;
+        else if(!strcmp(a, "--pcfxga")) bios_mode = 1;
+        else if(!strcmp(a, "--pcfxboot")) pcfxboot = true;
+        else if(!strcmp(a, "--pad"))
+        {
+            if(!parse_pad_expr(need_arg(&i, argc, argv, a), &initial_pad))
+            {
+                fprintf(stderr, "invalid --pad expression\n");
+                free(dumps.data);
+                return 2;
+            }
+            have_initial_pad = true;
+        }
+        else if(!strcmp(a, "--dump"))
+        {
+            struct Dump d;
+            d.region = need_arg(&i, argc, argv, a);
+            d.path = need_arg(&i, argc, argv, a);
+            if(!dump_list_push(&dumps, d))
+            {
+                fprintf(stderr, "out of memory while adding dump request\n");
+                free(dumps.data);
+                return 2;
+            }
+        }
+        else if(a[0] == '-')
+        {
+            fprintf(stderr, "Unknown option: %s\n", a);
+            usage(argv[0]);
+            free(dumps.data);
+            return 2;
+        }
+        else if(!game)
+            game = a;
+        else
+        {
+            fprintf(stderr, "Unexpected positional argument: %s\n", a);
+            free(dumps.data);
+            return 2;
+        }
+    }
+
+    struct CommandList commands;
+    memset(&commands, 0, sizeof(commands));
+    if(command_file && !load_commands(command_file, &commands))
+    {
+        free(dumps.data);
+        free(commands.data);
+        return 2;
+    }
+    if(auto_run && !add_auto_run_commands(&commands))
+    {
+        fprintf(stderr, "out of memory while adding auto-run commands\n");
+        free(dumps.data);
+        free(commands.data);
+        return 2;
+    }
+    if(commands.count)
+        qsort(commands.data, commands.count, sizeof(commands.data[0]), command_cmp);
+
+    char autodetected_bios_dir[1024];
+    char default_save_root[1024];
+    autodetected_bios_dir[0] = 0;
+    default_save_root[0] = 0;
+    if(!bios_dir_explicit)
+        bios_dir = autodetect_bios_dir_cli(bios_dir, game, autodetected_bios_dir, sizeof(autodetected_bios_dir));
+    if(!save_dir)
+        save_dir = default_save_root_cli(default_save_root, sizeof(default_save_root));
+
+    PCFX_HeadlessConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.bios_dir = bios_dir;
+    cfg.save_dir = save_dir;
+    cfg.sound_rate = 44100;
+    cfg.disable_3d_hardware = disable_3d_hardware ? 1 : 0;
+    cfg.prefer_fxga_bios = bios_mode;
+    cfg.disable_seek_audio_delay = disable_seek_audio_delay ? 1 : 0;
+    PCFX_Headless* emu = pcfx_headless_create(&cfg);
+    if(!emu)
+    {
+        fprintf(stderr, "Failed to create headless emulator; another instance may already be active.\n");
+        free(dumps.data);
+        free(commands.data);
+        return 1;
+    }
+
+    pcfx_headless_set_horizontal_width_mode(emu, horizontal_width_mode);
+    pcfx_headless_set_analog_mode(emu, analog_mode);
+    pcfx_headless_set_vdc_phase(emu, vdc_phase);
+    int status = 1;
+    size_t next_cmd = 0;
+    if(!(pcfxboot ? pcfx_headless_load_pcfxboot(emu, game) : pcfx_headless_load_cd(emu, game)))
+    {
+        fprintf(stderr, "Load failed: %s\n", pcfx_headless_last_error(emu));
+        fprintf(stderr, "BIOS path in use: %s\n", bios_dir ? bios_dir : ".");
+        fprintf(stderr, "Accepted standard PC-FX BIOS names: pcfx.rom, pcfxbios.bin, pcfxv101.bin, pcfx_bios.bin\n");
+        fprintf(stderr, "Put a BIOS in ~/.pcfxemu or ~/.pcfxemu/bios, set PCFX_BIOS_DIR, or run with --bios-dir /path/to/bios-dir-or-file.\n");
+        goto out;
+    }
+
+    if(have_initial_pad)
+        pcfx_headless_set_pad(emu, 0, initial_pad);
+    if(state_in && !pcfx_headless_load_state(emu, state_in))
+    {
+        fprintf(stderr, "State load failed: %s\n", pcfx_headless_last_error(emu));
+        goto out;
+    }
+    if(y4m && !pcfx_headless_open_y4m(emu, y4m))
+    {
+        fprintf(stderr, "Y4M open failed: %s\n", pcfx_headless_last_error(emu));
+        goto out;
+    }
+    if(wav && !pcfx_headless_open_wav(emu, wav))
+    {
+        fprintf(stderr, "WAV open failed: %s\n", pcfx_headless_last_error(emu));
+        goto out;
+    }
+
+    if(frame_csv)
+    {
+        diagnostic.output = fopen(frame_csv,"w");
+        if(!diagnostic.output) { perror(frame_csv); goto out; }
+        if(fputs("frame,region_width,region_height,changed_pixels,fnv64\n", diagnostic.output)<0)
+            goto out;
+    }
+
+    if(ram_csv)
+    {
+        if(!ram_offset_count) { fprintf(stderr,"--ram-csv requires --ram-word\n"); goto out; }
+        ram_output=fopen(ram_csv,"w");
+        if(!ram_output) { perror(ram_csv); goto out; }
+        fputs("frame",ram_output);
+        for(size_t j=0;j<ram_offset_count;j++) fprintf(ram_output,",ram_0x%zx",ram_offsets[j]);
+        fputc('\n',ram_output);
+    }
+
+    for(uint64_t f = 0; f < frames; f++)
+    {
+        while(next_cmd < commands.count && commands.data[next_cmd].frame == f)
+            apply_command(emu, &commands.data[next_cmd++]);
+        if(!pcfx_headless_run_frame(emu))
+        {
+            fprintf(stderr, "Run failed at frame %llu: %s\n", (unsigned long long)f, pcfx_headless_last_error(emu));
+            goto out;
+        }
+        if(ram_output)
+        {
+            fprintf(ram_output,"%llu",(unsigned long long)f);
+            for(size_t j=0;j<ram_offset_count;j++)
+            {
+                uint32_t value=0;
+                if(!pcfx_headless_read_ram_u32(emu,ram_offsets[j],&value))
+                { fprintf(stderr,"Invalid RAM word read at 0x%zx\n",ram_offsets[j]); goto out; }
+                fprintf(ram_output,",%u",(unsigned)value);
+            }
+            fputc('\n',ram_output);
+        }
+        if(diagnostic.output && !frame_diagnostic_write(&diagnostic,emu,f))
+        {
+            fprintf(stderr,"Frame diagnostic failed at frame %llu\n", (unsigned long long)f);
+            goto out;
+        }
+    }
+
+    if(screenshot && !pcfx_headless_save_screenshot_png(emu, screenshot))
+    {
+        fprintf(stderr, "Screenshot failed: %s\n", pcfx_headless_last_error(emu));
+        goto out;
+    }
+    for(size_t di = 0; di < dumps.count; di++)
+    {
+        const struct Dump* d = &dumps.data[di];
+        if(!pcfx_headless_dump_memory(emu, d->region, d->path))
+        {
+            fprintf(stderr, "Dump failed: %s\n", pcfx_headless_last_error(emu));
+            goto out;
+        }
+    }
+    if(state_out && !pcfx_headless_save_state(emu, state_out))
+    {
+        fprintf(stderr, "State save failed: %s\n", pcfx_headless_last_error(emu));
+        goto out;
+    }
+
+    pcfx_headless_close_y4m(emu);
+    pcfx_headless_close_wav(emu);
+    fprintf(stdout, "ran_frames=%llu audio_frames=%llu final_pad=0x%04x video_backend=%s huc6273=%s\n",
+            (unsigned long long)pcfx_headless_frame_count(emu),
+            (unsigned long long)pcfx_headless_audio_frame_count(emu),
+            pcfx_headless_get_pad(emu, 0),
+            pcfx_headless_using_fast_video(emu) ? "fast" : "upstream",
+            pcfx_headless_3d_hardware_enabled(emu) ? "enabled" : "disabled");
+    status = 0;
+
+out:
+    if(ram_output) fclose(ram_output);
+    if(diagnostic.output) fclose(diagnostic.output);
+    free(diagnostic.previous);
+    pcfx_headless_destroy(emu);
+    free(dumps.data);
+    free(commands.data);
+    return status;
+}

@@ -1,0 +1,271 @@
+#include "../mednafen-endian.h"
+
+static uint8 MDFN_FASTCALL port_rbyte(v810_timestamp_t *timestamp, uint32 A)
+{
+ if(A <= 0x0FF)
+  return(FXINPUT_Read8(A, (*timestamp)));
+ else if(A >= 0x100 && A <= 0x2FF) // SOUNDBOX dummy
+ {
+  (*timestamp) += 4;
+ }
+ else if(A >= 0x300 && A <= 0x3FF) // FXVCE
+ {
+  (*timestamp) += 4;
+  return(FXVCE_Read16(A));
+ }
+ else if(A >= 0x400 && A <= 0x5FF) // 0x400-0x4FF: VDC-A ; 0x500-0x5FF: VDC-B
+ {
+  (*timestamp) += 4;
+  return(VDC_Read16(fx_vdc_chips[(A >> 8) & 0x1], (A & 4) >> 2, false));
+ }
+ else if(A >= 0x600 && A <= 0x6FF)
+ {
+  uint8 v;
+  (*timestamp) += 4;
+  (*timestamp) += KING_KRAMReadWaitCycles(*timestamp, A);
+  v = KING_Read8((*timestamp), A);
+  (*timestamp) += KING_DMAWedgeStallCycles();
+  return(v);
+ }
+ else if(A >= 0x700 && A <= 0x7FF)
+ {
+  if(!(A & 1))
+  {
+   FXDBG("ExBusReset B Read");
+   return(ExBusReset);
+  }
+  return(0);
+ }
+ else if(A >= 0xc00 && A <= 0xCFF) // Backup memory control
+ {
+  switch(A & 0xC0)
+  {
+   case 0x80: return(BackupControl);
+   case 0x00: return(Last_VDC_AR[0]);
+   case 0x40: return(Last_VDC_AR[1]);
+  }
+ }
+ else if(A >= 0xe00 && A <= 0xeff)
+ {
+  return(PCFXIRQ_Read8(A));
+ }
+ else if(A >= 0xf00 && A <= 0xfff)
+ {
+  return(FXTIMER_Read8(A, (*timestamp)));
+ }
+ #ifdef HAVE_HUC6273
+ else if((A & 0x7FFFFFFF) >= 0x500000 && (A & 0x7FFFFFFF) <= 0x53ffff)
+ {
+  if(WantHuC6273)
+   { HuC6273_SetTime(*timestamp); return(HuC6273_Read8(A)); }
+ }
+ #endif
+ FXDBG("Unknown 8-bit port read: %08x", A);
+
+ return(0x00);
+}
+
+static uint16 MDFN_FASTCALL port_rhword(v810_timestamp_t *timestamp, uint32 A)
+{
+ if(A <= 0x0FF)
+  return(FXINPUT_Read16(A, (*timestamp)));
+ else if(A >= 0x100 && A <= 0x3FF) // SOUNDBOX dummy
+ {
+  (*timestamp) += 4;
+  if(A >= 0x300)
+  {
+	return(FXVCE_Read16(A));
+  }
+ }
+ else if(A >= 0x400 && A <= 0x5FF) // 0x400-0x4FF: VDC-A ; 0x500-0x5FF: VDC-B
+ {
+  (*timestamp) += 4;
+  return(VDC_Read16(fx_vdc_chips[(A >> 8) & 0x1], (A & 4) >> 2, false));
+ }
+ else if(A >= 0x600 && A <= 0x6FF)
+ {
+  uint16 v;
+  (*timestamp) += 4;
+  (*timestamp) += KING_KRAMReadWaitCycles(*timestamp, A);
+  v = KING_Read16((*timestamp), A);
+  (*timestamp) += KING_DMAWedgeStallCycles();
+  return(v);
+ }
+ else if(A >= 0x700 && A <= 0x7FF)
+ {
+  FXDBG("ExBusReset H Read");
+
+  return(ExBusReset);
+ }
+ else if(A >= 0xc00 && A <= 0xCFF) // Backup memory control
+ {
+  switch(A & 0xC0)
+  {
+   case 0x80: return(BackupControl);
+   case 0x00: return(Last_VDC_AR[0]);
+   case 0x40: return(Last_VDC_AR[1]);
+  }
+ }
+ else if(A >= 0xe00 && A <= 0xeff)
+ {
+  return(PCFXIRQ_Read16(A));
+ }
+ else if(A >= 0xf00 && A <= 0xfff)
+ {
+  return(FXTIMER_Read16(A, (*timestamp)));
+ }
+ #ifdef HAVE_HUC6273
+ else if((A & 0x7FFFFFFF) >= 0x500000 && (A & 0x7FFFFFFF) <= 0x53ffff)
+ {
+  if(WantHuC6273)
+   { HuC6273_SetTime(*timestamp); return(HuC6273_Read16(A)); }
+ }
+ #endif
+ FXDBG("Unknown 16-bit port read: %08x", A);
+
+ return(0x00);
+}
+
+static void MDFN_FASTCALL port_wbyte(v810_timestamp_t *timestamp, uint32 A, uint8 V)
+{
+  if(A <= 0x0FF)
+   FXINPUT_Write8(A, V, (*timestamp));
+  else if(A >= 0x100 && A <= 0x1FF)
+  {
+   (*timestamp) += 2;
+   SoundBox_Write(A, V, (*timestamp));
+  }
+  else if(A >= 0x200 && A <= 0x2FF)
+  {
+   (*timestamp) += 2;
+   RAINBOW_Write8(A, V);
+  }
+  else if(A >= 0x300 && A <= 0x3FF) // FXVCE
+  {
+   (*timestamp) += 2;
+   (*timestamp) += KING_VCEWriteWaitCycles(*timestamp);
+   FXVCE_Write16(A, V);
+  }
+  else if(A >= 0x400 && A <= 0x5FF) // 0x400-0x4FF: VDC-A ; 0x500-0x5FF: VDC-B
+  {
+   (*timestamp) += 2;
+
+   if(!(A & 4))
+    Last_VDC_AR[(A >> 8) & 0x1] = V;
+   { static int tr = -1; static unsigned n; if(tr < 0) { const char *e = getenv("PCFXEMU_VDC_TRACE"); tr = (e && *e == '1'); }
+     if(tr && (A & 4) && (Last_VDC_AR[(A >> 8) & 0x1] & 0x1F) == 5 && (unsigned)V810_GetPC() < 0xFFF00000u && n++ < 300) fprintf(stderr, "[VDCCR] chip %d CR=%04x pc %08x\n", (A >> 8) & 1, V, (unsigned)V810_GetPC()); }
+
+   VDC_Write16(fx_vdc_chips[(A >> 8) & 0x1], (A & 4) >> 2, V);
+  }
+  else if(A >= 0x600 && A <= 0x6FF)
+  {
+   uint32 wait;
+   (*timestamp) += KING_IsKRAMDataWrite(A) ? 0 : 2;   /* KRAM data writes are posted into the latch (K18) */
+   wait = KING_KRAMWriteWaitCycles(*timestamp, A);
+   (*timestamp) += wait;
+   KING_Write8((*timestamp), A, V);
+  }
+  else if(A >= 0x700 && A <= 0x7FF)
+  {
+   if(!(A & 1))
+   {
+    FXDBG("ExBusReset B Write: %02x", V & 1);
+    ExBusReset = V & 1;
+   }
+  }
+  else if(A >= 0xc00 && A <= 0xCFF)
+  {
+   switch(A & 0xC1)
+   {
+    case 0x80: BackupControl = V & 0x3;
+               break;
+
+    default:   FXDBG("Port 8-bit write: %08x %02x", A, V);
+               break;
+   }
+  }
+  else if(A >= 0xe00 && A <= 0xeff)
+  {
+   FXDBG("IRQ write8: %08x %02x", A, V);
+   PCFXIRQ_Write16(A, V);
+  }
+  #ifdef HAVE_HUC6273
+  else if((A & 0x7FFFFFFF) >= 0x500000 && (A & 0x7FFFFFFF) <= 0x53ffff)
+  {
+   if(WantHuC6273)
+    { HuC6273_SetTime(*timestamp); HuC6273_Write16(A, V); }
+  }
+  #endif
+}
+
+static void MDFN_FASTCALL port_whword(v810_timestamp_t *timestamp, uint32 A, uint16 V)
+{
+  if(A <= 0x0FF)
+   FXINPUT_Write16(A, V, (*timestamp));
+  else if(A >= 0x100 && A <= 0x1FF)
+  {
+   (*timestamp) += 2;
+   SoundBox_Write(A, V, (*timestamp));
+  }
+  else if(A >= 0x200 && A <= 0x2FF)
+  {
+   (*timestamp) += 2;
+   RAINBOW_Write16(A, V);
+  }
+  else if(A >= 0x300 && A <= 0x3FF)
+  {
+   (*timestamp) += 2;
+   (*timestamp) += KING_VCEWriteWaitCycles(*timestamp);
+   FXVCE_Write16(A, V);
+  }
+  else if(A >= 0x400 && A <= 0x5FF) // 0x400-0x4FF: VDC-A ; 0x500-0x5FF: VDC-B
+  {
+   (*timestamp) += 2;
+
+   if(!(A & 4))
+    Last_VDC_AR[(A >> 8) & 0x1] = V;
+   { static int tr = -1; static unsigned n; if(tr < 0) { const char *e = getenv("PCFXEMU_VDC_TRACE"); tr = (e && *e == '1'); }
+     if(tr && (A & 4) && (Last_VDC_AR[(A >> 8) & 0x1] & 0x1F) == 5 && (unsigned)V810_GetPC() < 0xFFF00000u && n++ < 300) fprintf(stderr, "[VDCCR] chip %d CR=%04x pc %08x\n", (A >> 8) & 1, V, (unsigned)V810_GetPC()); }
+
+   VDC_Write16(fx_vdc_chips[(A >> 8) & 0x1], (A & 4) >> 2, V);
+  }
+  else if(A >= 0x600 && A <= 0x6FF)
+  {
+   uint32 wait;
+   (*timestamp) += KING_IsKRAMDataWrite(A) ? 0 : 2;   /* KRAM data writes are posted into the latch (K18) */
+   wait = KING_KRAMWriteWaitCycles(*timestamp, A);
+   (*timestamp) += wait;
+   KING_Write16((*timestamp), A, V);
+  }
+  else if(A >= 0x700 && A <= 0x7FF)
+  {
+   ExBusReset = V & 1;
+   FXDBG("ExBusReset H Write: %04x", V);
+  }
+  else if(A >= 0xc00 && A <= 0xCFF)
+  {
+   switch(A & 0xC0)
+   {
+    case 0x80: BackupControl = V & 0x3; 
+	       break;
+
+    default:   FXDBG("Port 16-bit write: %08x %04x", A, V);
+	       break;
+   }
+  }
+  else if(A >= 0xe00 && A <= 0xeff)
+  { 
+   PCFXIRQ_Write16(A, V);
+  }
+  else if(A >= 0xF00 && A <= 0xFFF)
+  {
+   FXTIMER_Write16(A, V, (*timestamp));
+  }
+  #ifdef HAVE_HUC6273
+  else if((A & 0x7FFFFFFF) >= 0x500000 && (A & 0x7FFFFFFF) <= 0x53ffff)
+  {
+   if(WantHuC6273)
+    { HuC6273_SetTime(*timestamp); HuC6273_Write16(A, V); }
+  }
+  #endif
+}

@@ -1,0 +1,11 @@
+out/
+build/
+dist/
+*.o
+*.d
+*.elf
+*.self
+*.pkg
+*.log
+*.rom
+*.bin

@@ -1,0 +1,50 @@
+#ifndef __PCFX_KING_H
+#define __PCFX_KING_H
+
+#include "pcfx.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void KING_StartFrame(VDC **, EmulateSpecStruct *espec);
+void KING_SetPixelFormat(void);
+/* Tunable VDC HSYNC-vs-KING phase. 18 is the historical uncalibrated default. */
+void KING_SetVDCHSyncPhase(int ticks);
+int KING_GetVDCHSyncPhase(void);
+uint16 FXVCE_Read16(uint32 A);
+void FXVCE_Write16(uint32 A, uint16 V);
+
+uint8 KING_Read8(const v810_timestamp_t timestamp, uint32 A);
+uint16 KING_Read16(const v810_timestamp_t timestamp, uint32 A);
+
+void KING_Write8(const v810_timestamp_t timestamp, uint32 A, uint8 V);
+void KING_Write16(const v810_timestamp_t timestamp, uint32 A, uint16 V);
+bool KING_IsKRAMDataWrite(uint32 A);
+uint32 KING_KRAMWriteWaitCycles(const v810_timestamp_t timestamp, uint32 A);
+extern int king_kram_write_mapped;
+uint32 KING_VCEWriteWaitCycles(const v810_timestamp_t timestamp);
+uint32 KING_KRAMReadWaitCycles(v810_timestamp_t timestamp, uint32 A);
+uint32 KING_DMAWedgeStallCycles(void);
+bool KING_Init(void);
+void KING_Close(void);
+void KING_Reset(const v810_timestamp_t timestamp);
+
+uint16 KING_GetADPCMHalfWord(int ch);
+void KING_RequestADPCMHalfWord(int ch);
+uint8 KING_MemPeek(uint32 A);
+uint8 KING_RB_Fetch(void);
+MDFN_Pixel FXVCE_GetPaletteNative(uint16 index);
+void KING_SetLayerEnableMask(uint64 mask);
+int KING_StateAction(StateMem *sm, int load, int data_only);
+void KING_NotifyOfBPE(bool read, bool write);
+void KING_SetLogFunc(void (*logfunc)(const char *, const char *, ...));
+void KING_EndFrame(v810_timestamp_t timestamp);
+void KING_ResetTS(v810_timestamp_t ts_base);
+v810_timestamp_t MDFN_FASTCALL KING_Update(const v810_timestamp_t timestamp);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
