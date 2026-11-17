@@ -1,41 +1,19 @@
-PS3DEV   ?= /mnt/d/ps3dev-sdk
+PS3DEV   ?= /usr/local/ps3dev
 PSL1GHT  ?= $(PS3DEV)/psl1ght
 PORTLIBS ?= $(PS3DEV)/portlibs/ppu
 
-CC       := $(PS3DEV)/ppu/bin/ppu-gcc
-STRIP    := $(PS3DEV)/ppu/bin/ppu-strip
-SPRX     := $(PS3DEV)/bin/sprxlinker
-SELF     := $(PS3DEV)/bin/make_self
+TITLE     := PCFX - PS3 (Alpha v0.1)
+APPID     := PCFX4PS30
+CONTENTID := UP0001-$(APPID)_00-0000000000000000
+APPVER    := 01.00
+ICON0     := $(CURDIR)/assets/ICON0.PNG
+PIC1      := $(CURDIR)/assets/PIC1.PNG
+PKGFILES  := $(CURDIR)/pkg
 
-TARGET   := pce_ps3
-HUGO_DIR := src/hugo
-PS3_DIR  := ps3
-SHIM_DIR := ps3/shim
-
-HUGO_SRCS := \
-	$(HUGO_DIR)/pce.c \
-	$(HUGO_DIR)/hard_pce.c \
-	$(HUGO_DIR)/h6280.c \
-	$(HUGO_DIR)/optable.c \
-	$(HUGO_DIR)/gfx.c \
-	$(HUGO_DIR)/sprite.c \
-	$(HUGO_DIR)/utils.c \
-	$(HUGO_DIR)/sound.c \
-	$(HUGO_DIR)/mix.c \
-	$(HUGO_DIR)/cd.c \
-	$(HUGO_DIR)/pcecd.c \
-	$(HUGO_DIR)/hcd.c \
-	$(HUGO_DIR)/list_rom.c \
-	$(HUGO_DIR)/iniconfig.c \
-	$(HUGO_DIR)/format.c \
-	$(HUGO_DIR)/trans_fx.c \
-	$(HUGO_DIR)/bios.c \
-	$(HUGO_DIR)/lang.c \
-	$(HUGO_DIR)/debug.c \
-	$(HUGO_DIR)/dis.c \
-	$(HUGO_DIR)/edit_ram.c \
-	$(HUGO_DIR)/followop.c \
-	$(HUGO_DIR)/bp.c
+OUT_DIR   := $(CURDIR)/out
+TARGET    := $(OUT_DIR)/PCFX4PS3
+PS3_DIR   := ps3
+SHIM_DIR  := ps3/shim
 
 PS3_SRCS := \
 	$(PS3_DIR)/ps3_main.c \
@@ -47,17 +25,14 @@ PS3_SRCS := \
 	$(PS3_DIR)/ps3_config.c \
 	$(PS3_DIR)/ps3_paths.c \
 	$(PS3_DIR)/ps3_log.c \
-	$(PS3_DIR)/ps3_sdlcompat.c
+	$(PS3_DIR)/ps3_sdlcompat.c \
+	$(PS3_DIR)/ps3_pcfx_bridge.c
 
-HUGO_OBJS := $(HUGO_SRCS:.c=.o)
-PS3_OBJS  := $(PS3_SRCS:.c=.o)
-PREBUILT_OBJS := $(PS3_DIR)/prebuilt/SDL_PSL1GHTrender.o
-OBJS      := $(HUGO_OBJS) $(PS3_OBJS) $(PREBUILT_OBJS)
+PS3_OBJS := $(PS3_SRCS:.c=.o)
 
 COMMON_INCLUDES := \
 	-I$(SHIM_DIR) \
 	-I$(PS3_DIR) \
-	-I$(HUGO_DIR) \
 	-I$(PORTLIBS)/include \
 	-I$(PORTLIBS)/include/SDL2 \
 	-I$(PORTLIBS)/include/freetype2 \
@@ -65,83 +40,35 @@ COMMON_INCLUDES := \
 	-I$(PS3DEV)/ppu/include
 
 COMMON_WARN := \
-	-Wall \
-	-Wno-unused-variable \
-	-Wno-unused-function \
-	-Wno-unused-but-set-variable \
-	-Wno-sign-compare \
-	-Wno-char-subscripts \
-	-Wno-parentheses \
-	-Wno-format \
-	-Wno-implicit-function-declaration \
-	-Wno-incompatible-pointer-types \
-	-Wno-pointer-sign \
-	-Wno-int-conversion \
-	-Wno-return-type \
-	-Wno-sequence-point \
-	-Wno-strict-aliasing \
-	-Wno-maybe-uninitialized \
-	-Wno-endif-labels \
-	-Wno-comment \
-	-Wno-switch
+	-Wall -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable \
+	-Wno-sign-compare -Wno-char-subscripts -Wno-parentheses -Wno-format \
+	-Wno-implicit-function-declaration -Wno-incompatible-pointer-types \
+	-Wno-pointer-sign -Wno-int-conversion -Wno-return-type -Wno-sequence-point \
+	-Wno-strict-aliasing -Wno-maybe-uninitialized -Wno-endif-labels -Wno-comment -Wno-switch
 
 COMMON_DEFS := \
-	-DPS3 \
-	-D__PS3__ \
-	-DPS3_PORT \
-	-DWORDS_BIGENDIAN=1 \
-	-DBYTE_ORDER=BIG_ENDIAN \
-	-DINLINE_STATIC="static inline" \
-	-DFINAL_RELEASE \
-	-DHAVE_CONFIG_H \
-	-DSDL_MAIN_HANDLED
+	-DPS3 -D__PS3__ -DPS3_PORT -DWORDS_BIGENDIAN=1 -DBYTE_ORDER=BIG_ENDIAN \
+	-DINLINE_STATIC="static inline" -DFINAL_RELEASE -DHAVE_CONFIG_H -DSDL_MAIN_HANDLED
 
-BASE_CFLAGS := -O2 -mcpu=cell -std=gnu99 -fcommon -fno-strict-aliasing -fsigned-char $(MACHDEP) $(COMMON_WARN) $(COMMON_INCLUDES) $(COMMON_DEFS)
-HUGO_CFLAGS := $(BASE_CFLAGS) -include $(SHIM_DIR)/prelude.h
-PS3_CFLAGS  := $(BASE_CFLAGS) -include $(SHIM_DIR)/prelude.h
+CFLAGS   := -DPKG_BUILD_STAMP=\"$(BUILD_STAMP)\"  -O2 -mcpu=cell -std=gnu99 -fcommon -fno-strict-aliasing -fsigned-char $(COMMON_WARN) $(COMMON_INCLUDES) $(COMMON_DEFS) -include $(SHIM_DIR)/prelude.h
+LDFLAGS  := -Wl,--wrap=rsxSetTransferScaleSurface -L$(PSL1GHT)/ppu/lib -L$(PORTLIBS)/lib -L$(PS3DEV)/ppu/lib
+LIBS     := -lSDL2_ttf -lSDL2_image -lfreetype -lpng -ljpeg -lSDL2 -lgcm_sys -lio -laudio -lsysutil -lsysmodule -lrsx -lrt -llv2 -lm -lz -lc
 
-LDFLAGS := $(MACHDEP) -Wl,--wrap=rsxSetTransferScaleSurface -L$(PSL1GHT)/ppu/lib -L$(PORTLIBS)/lib -L$(PS3DEV)/ppu/lib
+include $(PSL1GHT)/ppu_rules
 
-LIBS := \
-	-lSDL2_ttf \
-	-lSDL2_image \
-	-lfreetype \
-	-lpng \
-	-ljpeg \
-	-lSDL2 \
-	-lgcm_sys \
-	-lio \
-	-laudio \
-	-lsysutil \
-	-lsysmodule \
-	-lrsx \
-	-lrt \
-	-llv2 \
-	-lm \
-	-lz \
-	-lc
+all: $(OUT_DIR) $(TARGET).elf $(TARGET).self
+pkg: $(OUT_DIR) $(TARGET).pkg
 
-.PHONY: all clean
+$(OUT_DIR):
+	@mkdir -p $(OUT_DIR)
 
-all: $(TARGET).elf $(TARGET).self
-
-$(TARGET).elf: $(OBJS)
+$(TARGET).elf: $(PS3_OBJS)
 	@echo "[LD]  $@"
-	@$(CC) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
-
-$(TARGET).self: $(TARGET).elf
-	@echo "[SELF] $@"
-	@$(STRIP) $< -o $(TARGET).stripped.elf
-	@$(SPRX) $(TARGET).stripped.elf
-	@$(SELF) $(TARGET).stripped.elf $@
-
-$(HUGO_DIR)/%.o: $(HUGO_DIR)/%.c $(SHIM_DIR)/config.h $(SHIM_DIR)/prelude.h $(SHIM_DIR)/m6502.h
-	@echo "[CC]  $<"
-	@$(CC) $(HUGO_CFLAGS) -c $< -o $@
+	@$(CC) $(LDFLAGS) $(PS3_OBJS) $(LIBS) -o $@
 
 $(PS3_DIR)/%.o: $(PS3_DIR)/%.c $(PS3_DIR)/ps3_platform.h $(PS3_DIR)/ps3_btn_icons.h $(SHIM_DIR)/config.h
 	@echo "[CC]  $<"
-	@$(CC) $(PS3_CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(HUGO_OBJS) $(PS3_OBJS) $(TARGET).elf $(TARGET).stripped.elf $(TARGET).self
+	rm -f $(PS3_OBJS) $(OUT_DIR)/*.elf $(OUT_DIR)/*.self $(OUT_DIR)/*.fake.self $(OUT_DIR)/*.pkg EBOOT.BIN

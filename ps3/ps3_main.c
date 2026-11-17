@@ -1954,24 +1954,15 @@ static void run_main_frontend(void)
     char cur_dir[512];
     snprintf(cur_dir, sizeof(cur_dir), "%s", g_cfg.last_rom_dir);
 
-    scan_directory_browser(cur_dir);
-    if (g_browser_count == 0) {
-        strcpy(cur_dir, "/dev_hdd0");
-        scan_directory_browser(cur_dir);
-    }
-    if (g_cfg.auto_scan_startup) {
-        rescan_all_library_sources();
-    } else {
-        g_lib_count = 0;
-        rebuild_library_filter();
-    }
-
+ps3_log("DEBUG: Entrando a scan_directory_browser(%s)\n", cur_dir);
+    /* DESACTIVADO TEMPORALMENTE PARA PRUEBA DE MENU FLUIDO */
+    g_browser_count = 0;
+    g_lib_count = 0;
+    rebuild_library_filter();
     char cached_syscard[512] = {0};
-    int cached_has_bios = ps3_find_syscard(cached_syscard, sizeof(cached_syscard));
-    int cached_state_exists[10];
-    for (int s = 0; s < 10; s++) {
-        cached_state_exists[s] = ps3_state_exists(s);
-    }
+    int cached_has_bios = 0;
+    int cached_state_exists[10] = {0};
+    ps3_log("DEBUG: Menu listo sin escaneo de disco\n");
 
     const int visible_rows = 10;
 
@@ -1983,25 +1974,13 @@ static void run_main_frontend(void)
 
         if (pressed & PS3_ACT_L1) {
             active_tab = (active_tab + TAB_COUNT - 1) % TAB_COUNT;
-            if (active_tab == TAB_STATES) {
-                g_slot_thumb_loaded_slot = -1;
-                refresh_cached_slot_thumb(st_sel);
-                for (int s = 0; s < 10; s++) cached_state_exists[s] = ps3_state_exists(s);
-            }
-            if (!cached_has_bios && (active_tab == TAB_BIOS || active_tab == TAB_LIBRARY)) {
-                cached_has_bios = ps3_find_syscard(cached_syscard, sizeof(cached_syscard));
-            }
+ps3_log("DEBUG: Cambio de pestana L1 -> active_tab=%d\n", active_tab);
+            /* DESACTIVADO TEMPORALMENTE: lectura de disco al cambiar pestana */
         }
         if (pressed & PS3_ACT_R1) {
             active_tab = (active_tab + 1) % TAB_COUNT;
-            if (active_tab == TAB_STATES) {
-                g_slot_thumb_loaded_slot = -1;
-                refresh_cached_slot_thumb(st_sel);
-                for (int s = 0; s < 10; s++) cached_state_exists[s] = ps3_state_exists(s);
-            }
-            if (!cached_has_bios && (active_tab == TAB_BIOS || active_tab == TAB_LIBRARY)) {
-                cached_has_bios = ps3_find_syscard(cached_syscard, sizeof(cached_syscard));
-            }
+ps3_log("DEBUG: Cambio de pestana R1 -> active_tab=%d\n", active_tab);
+            /* DESACTIVADO TEMPORALMENTE: lectura de disco al cambiar pestana */
         }
 
         if (active_tab == TAB_LIBRARY) {
