@@ -15,7 +15,7 @@ void ps3_log_init(void)
     if (s_log_fp) return;
     s_log_fp = fopen(PS3_LOG_PATH, "a");
     if (s_log_fp) {
-        ps3_log("=== INICIO DE SESION [PKG: PCFX-PS3_%s] ===\n", PKG_BUILD_STAMP);
+        fprintf(s_log_fp, "=== LOG ABIERTO ===\n"); fflush(s_log_fp); fprintf(s_log_fp, "=== LOG ABIERTO ===\n"); fflush(s_log_fp); ps3_log("=== INICIO DE SESION [PKG: PCFX-PS3_%s] ===\n", PKG_BUILD_STAMP);
     }
 }
 

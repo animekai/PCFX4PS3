@@ -5,18 +5,18 @@
 #include <stddef.h>
 #include "ps3_btn_icons.h"
 
-#define PS3_APP_NAME        "PCE-PS3"
+#define PS3_APP_NAME        "PCFX - PS3"
 #define PS3_APP_VERSION     "1.03"
-#define PS3_TITLE_ID        "PCE4PS300"
+#define PS3_TITLE_ID        "PCFX4PS30"
 
-#define PS3_DATA_ROOT       "/dev_hdd0/pce4ps3"
-#define PS3_ROMS_DIR        "/dev_hdd0/pce4ps3/roms"
-#define PS3_BIOS_DIR        "/dev_hdd0/pce4ps3/bios"
-#define PS3_SAVES_DIR       "/dev_hdd0/pce4ps3/saves"
-#define PS3_BRAM_DIR        "/dev_hdd0/pce4ps3/bram"
-#define PS3_SCREENSHOTS_DIR "/dev_hdd0/pce4ps3/screenshots"
-#define PS3_CONFIG_PATH     "/dev_hdd0/pce4ps3/hugo.ini"
-#define PS3_LOG_PATH        "/dev_hdd0/pce4ps3/hugo.log"
+#define PS3_DATA_ROOT       "/dev_hdd0/pcfx4ps3"
+#define PS3_ROMS_DIR        "/dev_hdd0/pcfx4ps3/roms"
+#define PS3_BIOS_DIR        "/dev_hdd0/pcfx4ps3/bios"
+#define PS3_SAVES_DIR       "/dev_hdd0/pcfx4ps3/saves"
+#define PS3_BRAM_DIR        "/dev_hdd0/pcfx4ps3/bram"
+#define PS3_SCREENSHOTS_DIR "/dev_hdd0/pcfx4ps3/screenshots"
+#define PS3_CONFIG_PATH     "/dev_hdd0/pcfx4ps3/pcfx.ini"
+#define PS3_LOG_PATH        "/dev_hdd0/pcfx4ps3/pcfx.log"
 
 #define PS3_PKG_USRDIR      "/dev_hdd0/game/" PS3_TITLE_ID "/USRDIR"
 #define PS3_SKINS_DIR       PS3_PKG_USRDIR "/skins"
