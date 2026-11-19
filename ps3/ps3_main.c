@@ -40,6 +40,7 @@ int ps3_state_load_thumb(int s, uint32_t *o) { (void)s;(void)o; return -1; }
 void ps3_bram_load(const char *a) { (void)a; }
 void ps3_bram_save(const char *a) { (void)a; }
 
+static void dummy_audio_cb(void *u, const int16_t *s, uint32_t f) { (void)u;(void)s;(void)f; }
 static int prepare_bios_and_mem(void) {
     mkdir("/dev_hdd0/pcfx4ps3", 0777); mkdir("/dev_hdd0/pcfx4ps3/bios", 0777); mkdir("/dev_hdd0/pcfx4ps3/saves", 0777);
     FILE *sv = fopen("/dev_hdd0/pcfx4ps3/saves/PC-FXGA BIOS.sav", "ab");
@@ -115,19 +116,19 @@ static uint16_t read_pcfx_pad(void) {
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
     sysUtilUnregisterCallback(SYSUTIL_EVENT_SLOT0); sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, ps3_sysutil_cb, NULL);
-    ioPadInit(7); int has_bios = prepare_bios_and_mem(); ps3_log_init(); ps3_config_defaults();
-    if (ps3_video_init() != 0 || !has_bios) ps3_return_to_xmb();
+    ps3_log_init(); ps3_log("STEP 1: main iniciado\n"); ioPadInit(7); ps3_log("STEP 2: ioPadInit OK\n"); int has_bios = prepare_bios_and_mem(); ps3_config_defaults(); ps3_log("STEP 3: has_bios=%d\n", has_bios);
+    if (ps3_video_init() != 0 || !has_bios) { ps3_log("ERROR video/bios\n"); ps3_return_to_xmb(); } ps3_log("STEP 4: video_init OK\n");
     scan_all_games();
     ps3_log("Juegos listados: %d\n", g_gcount);
-    int total = g_gcount + 2, sel = 0, dirty = 1; uint16_t prev_p = 0; uint64_t m_ms = 0;
+    int total = g_gcount + 2, sel = 0, dirty = 4; uint16_t prev_p = 0; uint64_t m_ms = 0;
     struct timeval t_m, t_n; gettimeofday(&t_m, NULL);
     while (!g_app_should_quit) {
         ps3_check_sysutil(); uint16_t pad = read_pcfx_pad(), pr = pad & ~prev_p; prev_p = pad;
-        if (pr & (1u << 0)) { sel = (sel + total - 1) % total; dirty = 1; }
-        if (pr & (1u << 2)) { sel = (sel + 1) % total; dirty = 1; }
+        if (pr & (1u << 0)) { sel = (sel + total - 1) % total; dirty = 2; }
+        if (pr & (1u << 2)) { sel = (sel + 1) % total; dirty = 2; }
         if (pr & (1u << 8)) break;
-        if (dirty) {
-            dirty = 0;
+        if (dirty > 0) {
+            dirty--;
             ps3_video_clear(10, 14, 28);
             ps3_draw_text_shadow(80, 60, 0xFF7CE8FFu, 2, "PCFX - PS3  [SELECTOR JUEGOS & BIOS v0.1.0]");
             for (int i = 0; i < total && i < 10; i++) {
@@ -145,9 +146,11 @@ int main(int argc, char *argv[]) {
     if (g_app_should_quit) ps3_return_to_xmb();
     PCFX_HeadlessConfig cfg; memset(&cfg, 0, sizeof(cfg));
     cfg.bios_dir = "/dev_hdd0/pcfx4ps3/bios"; cfg.save_dir = "/dev_hdd0/pcfx4ps3/saves";
-    cfg.sound_rate = 0; cfg.cd_speed = 4; cfg.disable_3d_hardware = 1; cfg.disable_seek_audio_delay = 1;
+    cfg.sound_rate = 48000; cfg.cd_speed = 4; cfg.disable_3d_hardware = 1; cfg.disable_seek_audio_delay = 1;
     cfg.bios_patch_flags = (sel == 1) ? PCFX_BIOS_PATCH_ENGLISH : (PCFX_BIOS_PATCH_ENGLISH | PCFX_BIOS_PATCH_SHORTINTRO);
     PCFX_Headless *emu = pcfx_headless_create(&cfg);
+    if (emu) pcfx_headless_set_audio_callback(emu, dummy_audio_cb, NULL);
+    if (emu) pcfx_headless_set_audio_callback(emu, dummy_audio_cb, NULL);
     ps3_log("Iniciando opcion sel=%d (%s)...\n", sel, (sel >= 2) ? g_gpaths[sel - 2] : "BIOS");
     int ok = (sel >= 2) ? pcfx_headless_load_cd(emu, g_gpaths[sel - 2]) : pcfx_headless_boot_bios(emu);
     if (!emu || ok == 0) { ps3_log("ERROR carga: %s\n", emu ? pcfx_headless_last_error(emu) : "NULL"); ps3_return_to_xmb(); }

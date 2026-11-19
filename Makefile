@@ -93,7 +93,7 @@ PS3_DEFS := -DPS3 -D__PS3__ -DPS3_PORT -DPKG_BUILD_STAMP=\"$(BUILD_STAMP)\" -DWO
 
 CFLAGS   := -O3 -ffast-math -mcpu=cell -std=gnu11 -fcommon -fno-strict-aliasing -fsigned-char $(COMMON_WARN) $(COMMON_INCLUDES)
 LDFLAGS  := -L$(PSL1GHT)/ppu/lib -L$(PORTLIBS)/lib -L$(PS3DEV)/ppu/lib
-LIBS     := -lfont3d -ltiny3d -lsimdmath -lgcm_sys -lio -laudio -lsysutil -lsysmodule -lrsx -lrt -llv2 -lm -lz -lc
+LIBS     := -lSDL2_ttf -lSDL2_image -lfreetype -lpng -ljpeg -lSDL2 -lgcm_sys -lio -laudio -lsysutil -lsysmodule -lrsx -lrt -llv2 -lm -lz -lc
 
 include $(PSL1GHT)/ppu_rules
 

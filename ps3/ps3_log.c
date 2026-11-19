@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 
 #ifndef PKG_BUILD_STAMP
 #define PKG_BUILD_STAMP "0.1-dev"
@@ -13,6 +14,7 @@ static FILE *s_log_fp = NULL;
 void ps3_log_init(void)
 {
     if (s_log_fp) return;
+    mkdir("/dev_hdd0/pcfx4ps3", 0777);
     s_log_fp = fopen(PS3_LOG_PATH, "a");
     if (s_log_fp) {
         fprintf(s_log_fp, "=== LOG ABIERTO ===\n"); fflush(s_log_fp); fprintf(s_log_fp, "=== LOG ABIERTO ===\n"); fflush(s_log_fp); ps3_log("=== INICIO DE SESION [PKG: PCFX-PS3_%s] ===\n", PKG_BUILD_STAMP);
@@ -32,7 +34,8 @@ void ps3_log_close(void)
 void ps3_log(const char *fmt, ...)
 {
     if (!s_log_fp) {
-        s_log_fp = fopen(PS3_LOG_PATH, "a");
+        mkdir("/dev_hdd0/pcfx4ps3", 0777);
+    s_log_fp = fopen(PS3_LOG_PATH, "a");
         if (!s_log_fp) return;
     }
 

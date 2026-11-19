@@ -66,11 +66,9 @@ static uint8 MDFN_FASTCALL mem_rbyte(v810_timestamp_t *timestamp, uint32 A)
      (the next read returns the following word), exactly like IN.B from 0x604 / 0x605. */
   return(port_rbyte(timestamp, 0x604 | (A & 1)));
  }
- else if(A >= 0xE0000000 && A <= 0xE7FFFFFF && !(A & 1))
+ else if(A >= 0xE0000000 && A <= 0xE7FFFFFF)
  {
-
-  //printf("%d\n", (A - 0xE0000000) >> 1);
-  return(BackupRAM[(A & 0xFFFF) >> 1]);
+  return((A & 1) ? 0xFF : BackupRAM[(A & 0xFFFF) >> 1]);
  }
  else if(A >= 0xE8000000 && A <= 0xE9FFFFFF)
  {
